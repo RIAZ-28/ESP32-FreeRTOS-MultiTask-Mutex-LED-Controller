@@ -1,73 +1,132 @@
 # ESP32-FreeRTOS-MultiTask-Mutex-LED-Controller
 
 ## What it does
-Three LEDs blink independently and asynchronously on an ESP32, each driven by its
-own FreeRTOS task with its own timing. A button pauses all three LEDs exactly where
-they are mid-cycle (phase-preserving, not just on/off), and resumes each from that
-same point on release. A UART interface accepts single-character commands to
-override behavior: '1' forces all LEDs on, '0' forces all off, 'b' resumes normal
-independent blinking.
+
+Three LEDs blink independently on an ESP32, with each LED controlled by its own
+FreeRTOS task and its own timing interval.
+
+A UART interface accepts single-character commands:
+
+* `'1'` forces all LEDs on
+* `'0'` forces all LEDs off
+* `'b' enables normal independent blinking
+
+A push button pauses blinking while pressed.
+
+This was the **initial implementation** of the project and was built to explore
+FreeRTOS task creation, task priorities, mutex-based synchronization, UART
+communication, and direct GPIO register manipulation.
 
 ## What makes it non-trivial
-All three LED pins share the same GPIO_OUT_REG. With three independent tasks each
-performing read-modify-write operations on that register concurrently, there's a
-real race condition: one task's bit-set/clear can be overwritten mid-operation by
-another task writing the same register at the same time. This project uses a mutex
-to serialize register access across tasks, preventing corruption of the shared
-output state.
 
-Pausing is phase-preserving: each task retains its position within its own blink
-cycle rather than just freezing its current on/off value, so a fast-blinking LED
-and a slow-blinking LED both resume exactly where they left off, not from a reset
-state.
+The three LEDs are controlled by three independent FreeRTOS tasks. Each task
+operates on the shared `GPIO_OUT_REG`, so concurrent read-modify-write operations
+can create a race condition.
+
+A FreeRTOS mutex is therefore used around GPIO register access to ensure that only
+one task modifies the shared GPIO output register at a time.
+
+Each LED task also has a different execution period:
+
+* LED 1 → 500 ms
+* LED 2 → 1000 ms
+* LED 3 → 1500 ms
+
+This produces independent blinking behavior while demonstrating how multiple
+FreeRTOS tasks can run with different timing and priorities.
+
+## Initial limitation
+
+While the LEDs followed their assigned timing correctly, the system felt
+**slow to respond to changes in control input**.
+
+The main reason was the relatively long `vTaskDelay()` used inside each LED task:
+
+```c
+vTaskDelay(500 / portTICK_PERIOD_MS);
+vTaskDelay(1000 / portTICK_PERIOD_MS);
+vTaskDelay(1500 / portTICK_PERIOD_MS);
+```
+
+Because each LED task could remain delayed for a relatively long interval,
+changes to the global `mode` or `paused` state were not always acted upon
+immediately.
+
+For example, an LED task waiting for its next 1500 ms cycle could take a
+significant amount of time before checking the updated control state.
+
+This became the motivation for redesigning the task architecture.
 
 ## How it works
-- Each LED's blink logic runs as a separate FreeRTOS task with independent timing
-- GPIO_OUT_REG writes are wrapped in mutex acquire/release to prevent concurrent
-  corruption across tasks
-- Button press signals all tasks to suspend, holding current phase state
-- Button release resumes each task from its held phase
-- UART RX parses single-character commands ('1', '0', 'b') and overrides task
-  behavior accordingly
+
+* Each LED has its own dedicated FreeRTOS task
+* Each task uses a different delay interval for blinking
+* `GPIO_OUT_REG` access is protected using a FreeRTOS mutex
+* A UART task reads single-character commands and updates the global mode
+* A button task monitors the pause input
+* LED tasks continuously evaluate the current mode and pause state
+* GPIO is controlled through direct register access
 
 ## Hardware / Setup
 
 **Components**
-- ESP32 30 pin CP2102 development board
-- 3x LED + 220Ω resistors
-- 1x push button
-- Breadboard
-- jumper wires
+
+* ESP32 30 pin CP2102 development board
+* 3x LED + 220Ω resistors
+* 1x push button
+* Breadboard
+* jumper wires
 
 **Pin Mapping**
 
 | Component | ESP32 Pin |
-|-----------|-----------|
+| --------- | --------- |
 | LED 1     | GPIO 2    |
 | LED 2     | GPIO 4    |
 | LED 3     | GPIO 5    |
 | Button    | GPIO 19   |
 
 **Wiring Notes**
-- Button configured with external pull-up; reads LOW when pressed
-- LEDs wired common cathode to GND through 220Ω resistor from each GPIO pin
+
+* Button configured with external pull-up; reads LOW when pressed
+* LEDs wired common cathode to GND through 220Ω resistor from each GPIO pin
 
 **Software**
-- ESP-IDF v6.0.1
-- FreeRTOS (bundled with ESP-IDF)
+
+* ESP-IDF
+* FreeRTOS (bundled with ESP-IDF)
 
 **Build & Flash**
-\`\`\`
+
+```bash
 idf.py set-target esp32
 idf.py build
-idf.py -p [YOUR_PORT] flash monitor
-\`\`\`
+idf.py -p port7 flash monitor
+```
+
+## Lessons learned
+
+This implementation helped identify an important real-time systems concept:
+
+**Task delay directly affects how frequently a task can react to changing system
+state.**
+
+Although separate tasks made the LED behavior easy to understand, using long
+blocking delays was not ideal when the same tasks were also responsible for
+reacting to external commands.
+
+This led to the second implementation, which uses a reusable task architecture
+and shorter scheduling intervals.
 
 ## Next steps
-- Extend UART interface to accept per-LED commands, not just global ones
-- Add debounce handling on the button input if not already present
-- Consider replacing polling-based UART read with interrupt-driven RX
+
+* Improve responsiveness further using FreeRTOS notifications or event groups
+* Replace polling-based UART input with an event-driven approach
+* Add proper button debounce handling
+* Add per-LED UART control
+* Compare task-based timing with FreeRTOS software timers
 
 ## Demo
-[Short clip: independent blinking, button pause showing phase preservation, UART
-commands '1'/'0'/'b' in action]
+
+[Short clip: three LEDs blinking at different rates, UART commands, and button
+pause behavior]
