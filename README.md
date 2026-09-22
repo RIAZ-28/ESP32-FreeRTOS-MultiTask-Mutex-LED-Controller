@@ -1,4 +1,4 @@
-# Concurrent Multi-LED Control with FreeRTOS — Mutex-Protected Shared GPIO Register
+# ESP32-FreeRTOS-MultiTask-Mutex-LED-Controller
 
 ## What it does
 Three LEDs blink independently and asynchronously on an ESP32, each driven by its
